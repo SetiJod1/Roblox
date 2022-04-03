@@ -1,0 +1,158 @@
+print('Finding Attractive Servers [Loading].');
+
+local MinimumBuyers = 4; -- How Many Buyers there Must Be
+local MinimumPlayers = 10; -- How Many Players there Must Be
+
+local ServerHopAfterMinutes = 1.5; -- How Many Minutes you Want To Wait Before Hopping
+
+local JoinMessageBool = true; -- Announce Your Art Price Range
+
+local AutoClaimBooth = true; -- Automatically Find/Claim A Booth
+
+local RichHunt = true; -- Hunt for Rich Players
+local RichMinimum = 100; -- How Rich the Players Have To Be
+local RichTime = 10; -- How Many Seconds each Rich Player Adds to The Hop Timer
+local RobuxTime = 0.12; -- How Much Time each Robux Spent by Rich People Adds in Seconds
+-- Tip: Use Values like '30/1000' to Signify that You Want to Add 30 Seconds for Every 1000 Robux
+
+-- Ignore --
+local Buyers = 0;
+local RichCount = 0;
+
+local RichSpent = 0;
+-- Ignore --
+
+repeat wait() until game:IsLoaded();
+print('Finding Attractive Servers [Loaded].');
+wait(2);
+
+local Players = game:GetService('Players');
+local Player = Players.LocalPlayer;
+local PlayerCount = #Players:GetChildren();
+
+local Plots = game:GetService('Workspace'):WaitForChild('Plots');
+
+local function GetServerList(Limit)
+    local Cursor, Servers = nil, {};
+    repeat
+        local Response = game:GetService('HttpService'):JSONDecode(game:HttpGet('https://games.roblox.com/v1/games/' .. game.PlaceId .. '/servers/Public?sortOrder=Asc&limit=100' .. (Cursor and ('&cursor=' .. Cursor) or '')));
+        for _, Server in pairs(Response.data) do
+            table.insert(Servers, Server);
+        end;
+        Cursor = Response.nextPageCursor;
+    until (not Cursor) or (#Servers >= Limit);
+    return Servers;
+end;
+
+local function Hop()
+    local IgnoreIds = {};
+    local Servers = GetServerList(1024);
+    warn(string.format('Hopping Servers [%d]', #Servers));
+    while true do
+        for _, ServerInfo in pairs(Servers) do
+            if (not table.find(IgnoreIds, ServerInfo.id)) and (ServerInfo.playing < ServerInfo.maxPlayers) then
+                game:GetService('TeleportService'):TeleportToPlaceInstance(game.PlaceId, ServerInfo.id, Players.LocalPlayer);
+                table.insert(IgnoreIds, ServerInfo.id);
+                wait();
+            end;
+        end;
+    end;
+end;
+
+local SayMessageRequest = game:GetService('ReplicatedStorage').DefaultChatSystemChatEvents.SayMessageRequest;
+local function Message(m)
+    SayMessageRequest:FireServer(m, 'All');
+end;
+
+local function GetArtPrice()
+    local LowestPriceArt, HighestPriceArt = (function()
+        local LowestPrice, HighestPrice;
+        for _, Easel in ipairs(Plots:FindFirstChild(Player.Name).Easels:GetChildren()) do
+            if (Easel.Canvas.SurfaceGui:FindFirstChild('Grid')) then
+                local Price = tonumber(string.match(Easel.ArtInfo.Frame.Info.Price.Text, '%d+'));
+                if (not LowestPrice) or (Price <= LowestPrice) then
+                    LowestPrice = Price;
+                end;
+                if (not HighestPrice) or (Price >= HighestPrice) then
+                    HighestPrice = Price;
+                end;
+            end;
+        end;
+        return LowestPrice or 0, HighestPrice or 0;
+    end)();
+    return LowestPriceArt, HighestPriceArt;
+end;
+
+local function SetupStay()
+    local StartTime = tick();
+    local HopTimer = (ServerHopAfterMinutes * 60) + (RichCount * RichTime) + math.ceil(RichSpent * RobuxTime);
+    warn(string.format('Staying for %d seconds.', HopTimer));
+    repeat
+        local Unclaimed = Plots:FindFirstChild('Unclaimed');
+        if (Unclaimed) then
+            (Player.Character or Player.CharacterAdded:Wait()):WaitForChild('HumanoidRootPart').CFrame = Unclaimed.Table.Bottom.CFrame * CFrame.new(0, 3, 0);
+            fireproximityprompt(Unclaimed.Table.Username.ClaimAttach.BoothClaimPrompt);
+        end;
+        wait(1);
+    until Plots:FindFirstChild(Player.Name);
+    wait(5);
+    if (JoinMessageBool) then
+        local Lowest, Highest = GetArtPrice();
+        if (Lowest == 0) and (Highest == 0) then
+            return spawn(Hop);
+        end;
+        local JoinMessage = string.format('I sell quality art for %d - %d robux only :)', Lowest, Highest);
+        Message(JoinMessage);
+        spawn(function()
+            while wait(60) do
+                Lowest, Highest = GetArtPrice();
+                JoinMessage = string.format('I sell quality art for %d - %d robux only :)', Lowest, Highest);
+                Message(JoinMessage);
+            end;
+        end);
+    end;
+    spawn(function()
+        while wait(HopTimer / 10) do
+            warn(string.format('Leaving in %d seconds.', HopTimer - (tick() - StartTime)));
+        end;
+    end);
+    wait(HopTimer);
+    Hop();
+end;
+
+local function TryStay()
+    if (PlayerCount >= MinimumPlayers) then
+        warn(string.format('Player Count: %d', PlayerCount));
+        for _, Player in ipairs(Players:GetChildren()) do
+            if (Player:WaitForChild('leaderstats', 5)) then
+                local Bought = Player.leaderstats.Bought.Value;
+                if (Bought > 0) then
+                    Buyers = Buyers + 1;
+                    if (RichHunt) and (Bought >= RichMinimum) then
+                        RichCount = RichCount + 1;
+                        RichSpent += Bought;
+                    end;
+                end;
+            end;
+        end;
+        if (Buyers >= MinimumBuyers) or (RichHunt) then
+            warn(string.format('Buyers: %d', Buyers));
+            if (RichHunt) then
+                warn(string.format('RichHunt: %d', RichCount));
+                warn(string.format('RichSpent: %d', RichSpent));
+                if (RichCount >= 1) then
+                    return spawn(SetupStay);
+                else
+                    return spawn(Hop);
+                end;
+            end;
+            return spawn(SetupStay);
+        else
+            return spawn(Hop);
+        end;
+    else
+        return spawn(Hop);
+    end;
+end;
+
+spawn(TryStay);
